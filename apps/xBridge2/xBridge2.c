@@ -128,7 +128,7 @@ where:
 
 XDATA uint16 wake_before_packet = 40;	// seconds to wake before a packet is expected
 static volatile BIT do_sleep = 0;		// indicates we should go to sleep between packets
-static volatile BIT is_sleeping = 0;	// flag indicating we are sleeping.
+static volatile BIT is_sleeping = 0;		// flag indicating we are sleeping.
 static volatile BIT usb_connected;		// indicates DTR set on USB.  Meaning a terminal program is connected via USB for debug.
 static volatile BIT sent_beacon;		// indicates if we have sent our current dex_tx_id to the app.
 static volatile BIT writing_flash;		// indicates if we are writing to flash.
@@ -141,6 +141,7 @@ static volatile BIT got_ok;				// flag indicating we got OK from the HM-1x
 static volatile BIT do_leds;			// flag indicating to NOT show LEDs
 static volatile BIT send_debug;			// flag indicating to send debug output
 static volatile BIT sleep_ble;			// flag indicating to sleep the BLE module (power down in sleep)
+static volatile BIT dexterity_mode;		// ??????????
 static volatile uint32 dly_ms = 0;
 static volatile uint32 pkt_time = 0;
 // these flags will be stored in Flash
@@ -196,7 +197,8 @@ XDATA xBridge_settings settings;
 #define XBRIDGE_HW				(0x0008)
 #define DO_LEDS					(0x0010)
 #define SEND_DEBUG				(0x0020)
-// next flag will be 0x0040
+#define DEXTERITY_MODE				(0x0040)
+// next flag will be 0x0080
 
 // array of HM-1x baudrates for rate detection.
 XDATA uint32 uart_baudrate[9] = {9600,19200,38400,57600,115200,4800,2400,1200,230400};
@@ -790,7 +792,7 @@ uint8 min8(uint8 a, uint8 b)
 }
 
 
-/*
+
 // getPacketRSSI - returns the RSSI value from the Dexcom_packet passed to it.
 int8 getPacketRSSI(Dexcom_packet* p)
 {
@@ -798,7 +800,7 @@ int8 getPacketRSSI(Dexcom_packet* p)
 	return (p->RSSI/2)-73;
 }
 
-
+/*
 //getPacketPassedChecksum - returns the checksum of the Dexcom_packet passed to it.
 uint8 getPacketPassedChecksum(Dexcom_packet* p)
 {
@@ -1662,7 +1664,7 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 	// a variable to use to convert the pkt-txId to something we can use.
 	uint8 txid = 0;
 	if(send_debug)
-		printf_fast("waiting for packet on channel %u for %lu \r\n", channel, milliseconds);
+		printf_fast("waiting for packet on channel %u for %lu until %lu \r\n", channel, milliseconds, getMs() + milliseconds);
 	// safety first, make sure the channel is valid, and return with error if not.
 	if(channel >= NUM_CHANNELS)
 		return -1;
@@ -1709,6 +1711,7 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 						lastpktxid = txid;
 					}
 					last_channel = channel;
+					printf("dexiterity packet %s %lu %lu %hhu %hhi %hhu\r\n", dexcom_src_to_ascii(pkt->src_addr), dex_num_decoder(pkt->raw), 2 * dex_num_decoder(pkt->filtered), pkt->battery, getPacketRSSI(pkt), txid);
 				}
 			}
 			else {
@@ -1753,6 +1756,9 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 		0		- 	No Packet received, or a command recieved on the USB.
 		1		-	Packet recieved that passed CRC.
 */
+
+#define PACKET_TIME 299200
+
 int get_packet(Dexcom_packet* pPkt)
 {
 	static BIT timed_out = 0;
@@ -1787,13 +1793,13 @@ int get_packet(Dexcom_packet* pPkt)
 			else if(getMs()<pkt_time) 
 			{
 				//the current time is less than the pkt_time, meaning our ms register has rolled over.
-				delay = (300000 - (wake_before_packet*1000)) - (4294967295 + getMs() - pkt_time);
+				delay = (PACKET_TIME ) - (4294967295 + getMs() - pkt_time);
 			}
 			else
 			{
 				// the current time is greater than the last pkt_time, so we just do a basic calculation.
 				// 5 mins in ms + the wake_before_packet time - (current ms - last packet ms)
-				delay = (300000 - (wake_before_packet*1000)) - (getMs() - pkt_time);
+				delay = (PACKET_TIME +500 / 2) - (getMs() - pkt_time);
 			}
 			//if we have a delay number that doesn't equal 0, we need to subtract 500 * the channel we last captured on.
 			// ie, if we last captured on channel 0, subtract 0.  If on channel 1, subtract 500, etc
@@ -1806,9 +1812,9 @@ int get_packet(Dexcom_packet* pPkt)
 					printf_fast("%lu: last_channel is %u, delay is %lu\r\n", getMs(), last_channel, delay);
 			}
 			// in case the figure we came up with is greater than 5 minutes, we deal with it here.  Probably never will run, i'm just like that.
-			while(delay > 300000)
+			while(delay > PACKET_TIME)
 			{
-				delay -= 300000;
+				delay -= PACKET_TIME;
 			}
 		}
 		switch(WaitForPacket(delay, pPkt, nChannel))
@@ -1860,7 +1866,11 @@ void main()
 	uint8 i = 0;
 	uint16 rpt_pkt=0;
 	XDATA uint32 tmp_ms = 0;
-	systemInit();
+	
+	setFlag(DEXTERITY_MODE,1);
+    setFlag(SEND_DEBUG,1);
+
+        systemInit();
 	//initialise the USB port
 	usbInit();
 	//initialise the dma channel for working with flash.
@@ -1947,6 +1957,7 @@ void main()
 	// read the flash stored value of our TXID.
 	// we do this by reading the address we are interested in directly, cast as a pointer to the 
 	// correct data type.
+	settings.dex_tx_id = 6631332; //????
 	if(settings.dex_tx_id >= 0xFFFFFFFF) 
 		settings.dex_tx_id = 0;
 	// store the time we woke up.
@@ -2002,6 +2013,21 @@ void main()
 		LED_RED(0);
 		if(send_debug)
 			printf_fast("%lu - got pkt\r\n", getMs());
+
+                 //?????
+                 waitDoingServices(1000, 0,1);
+                 LED_GREEN(1);
+                 waitDoingServices(1000, 0,1);
+                 LED_GREEN(0);
+                 waitDoingServices(1000, 0,1);
+                 LED_GREEN(1);
+                 if(getFlag(DEXTERITY_MODE)){
+                     continue; //?????????????????????????
+                 }
+
+
+
+
 		while (!do_sleep){
 			while(!ble_connected && (getMs() - pkt_time)<120000) {
 				if(send_debug)
