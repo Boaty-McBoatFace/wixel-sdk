@@ -1190,6 +1190,7 @@ uint32 dex_num_decoder(uint16 usShortFloat)
 
 void send_data( uint8 *msg, uint8 len)
 {
+/*
 	uint8 i = 0;
 	//wait until uart1 Tx Buffer is empty
 	while(uart1TxAvailable() < len) {};
@@ -1210,6 +1211,7 @@ void send_data( uint8 *msg, uint8 len)
 		if(send_debug)
 			printf_fast("\r\nResponse: ");
 	}
+*/
 }
 
 
@@ -1653,9 +1655,9 @@ void swap_channel(uint8 channel, uint8 newFSCTRL0)
 int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 {
 	// store the current wixel milliseconds so we know how long we are waiting.
-	uint32 start = getMs();
+	XDATA uint32 start = getMs();
 	// clear the packet pointer we are going to use to detect one.
-	uint8 XDATA * packet = 0;
+	XDATA uint8  * packet = 0;
 	// set the return code to timeout indication, as it is the most likely outcome.
 	int nRet = 0;
 	// lastpktid is static, because we need to store it during between calls.
@@ -1664,7 +1666,7 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 	// a variable to use to convert the pkt-txId to something we can use.
 	uint8 txid = 0;
 	if(send_debug)
-		printf_fast("waiting for packet on channel %u for %lu until %lu \r\n", channel, milliseconds, getMs() + milliseconds);
+		printf("XBRIDGE:[%lu] starting wait for packet on channel %d(%d) - will wait for %lu ms until [%lu] \r\n", start, channel, (int)CHANNR, milliseconds, start + milliseconds);
 	// safety first, make sure the channel is valid, and return with error if not.
 	if(channel >= NUM_CHANNELS)
 		return -1;
@@ -1711,12 +1713,18 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 						lastpktxid = txid;
 					}
 					last_channel = channel;
-					printf("dexiterity packet %s %lu %lu %hhu %hhi %hhu\r\n", dexcom_src_to_ascii(pkt->src_addr), dex_num_decoder(pkt->raw), 2 * dex_num_decoder(pkt->filtered), pkt->battery, getPacketRSSI(pkt), txid);
+					printf("%s %lu %lu %hhu %hhi %hhu\r\n", dexcom_src_to_ascii(pkt->src_addr), dex_num_decoder(pkt->raw), 2 * dex_num_decoder(pkt->filtered), pkt->battery, getPacketRSSI(pkt), txid);
+					if(send_debug)
+						printf("XBRIDGE:[%lu] received packet channel %d(%d) RSSI %d offset %02X bytes %hhu\r\n", getMs(), channel, (int)CHANNR, getPacketRSSI(pkt), fOffset[channel], len);
+                			nRet = 1; //??? Change this
 				}
 			}
 			else {
-				if(send_debug)
-					printf_fast("bad CRC on channel %d\r\n", channel);
+				//if(send_debug)
+				//	printf_fast("bad CRC on channel %d\r\n", channel);
+				if(send_debug) {
+					printf("XBRIDGE:[%lu] CRC failure channel %d(%d) RSSI %d %hhu bytes received\r\n", getMs(), channel, (int)CHANNR, (int)((int8)(RSSI))/2 - 73, len);
+				}
 				nRet = -2;
 			}
 			// the line below can be commented/uncommented for debugging.
@@ -1729,6 +1737,8 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 	}
 	// we timed out waiting for the packet.
 	//printf_fast("timed out waiting for packet                                                \r\n");
+	if(send_debug)
+        	printf("XBRIDGE:[%lu] timed out waiting for packet on channel %d(%d)\r\n", getMs(), channel, (int)CHANNR);
 	return nRet;
 }
 
@@ -1757,21 +1767,46 @@ int WaitForPacket(uint32 milliseconds, Dexcom_packet* pkt, uint8 channel)
 		1		-	Packet recieved that passed CRC.
 */
 
-#define PACKET_TIME 299200
+
+#define PACKET_WAIT  299985
+uint32 calculate_first_packet_delay(uint32 last_packet) {
+    XDATA uint32 next_packet;
+    XDATA uint32 now = getMs();
+    printf("last_packet = %lu\r\n", last_packet);
+//last_packet = 0;//??????????
+    if(last_packet == 0) {
+        return 0;
+    }
+
+    next_packet = last_packet + PACKET_WAIT; 
+    while(next_packet < now ) { // This writing should pass maxinteger ??????
+        next_packet += PACKET_WAIT;
+    }
+    printf("next_packet = %lu (don't forget the 150)\r\n", next_packet);
+
+    return next_packet - now + 150;
+}
+
 
 int get_packet(Dexcom_packet* pPkt)
 {
 	static BIT timed_out = 0;
 	static BIT crc_error = 0;
+	XDATA static uint32 last_packet = 0;
 	//static uint32 last_cycle_time;
 	//uint32 now=0;
-	uint32 delay = 0;
+	XDATA uint32 delay = calculate_first_packet_delay(last_packet);
 	//variable holding an index to each channel parameter set.  Set to the first channel.
-	int nChannel = 0;
+	XDATA int nChannel = 0;
 	//printf_fast("getting Packet\r");
 	// start channel is the channel we initially do our infinite wait on.
+
+
+	XDATA uint8 channel_0_timed_out = 0;
+	XDATA int32 packet_captured = 0;
 	for(nChannel = START_CHANNEL; nChannel < NUM_CHANNELS; nChannel++)
 	{
+/*
 		// if we are not on the start channel, we are delaying only for 500ms to capture a packet on the channel.
 		if(nChannel != START_CHANNEL) 
 		{
@@ -1817,36 +1852,60 @@ int get_packet(Dexcom_packet* pPkt)
 				delay -= PACKET_TIME;
 			}
 		}
+*/
 		switch(WaitForPacket(delay, pPkt, nChannel))
 		{
-			case 1:			
+			case 1:	
 				// got a packet that passed CRC
+/*
 					pkt_time = getMs();
 					timed_out = 0;
 					if(send_debug)
 						printf_fast("got a packet at %lu on channel %u\r\n", pkt_time, last_channel);
-					return 1;
+*/
+
+				if(channel_0_timed_out && (packet_captured == 0)) {
+                    			if(send_debug) {
+                        			printf("XBRIDGE:[%lu] YES GOT A PACKET AFTER BETTER WAITING %d(%d) \r\n", getMs(), nChannel, (int)CHANNR);
+                			}
+				}
+				packet_captured++;
+				last_packet = getMs() - nChannel * 500;
+				break;
+
 			case 0:
 				// timed out
-				//printf_fast("timed out\r");
-				//last_cycle_time=now;
-				timed_out = 1;
-				continue;
+	                	if(nChannel == 0) {
+        	            		channel_0_timed_out = 1;
+                		}
+				break;
 			case -1:
 			{
 			// cancelled by inbound data on USB (command), or channel invalid.
 				//printf_fast("leaving getPacket\r\n");
-				return 0;
+				break;
 			}
 			case -2:
 			{
 				//got a bad CRC on the channel, so say so to let the delay calculation know to wait a little longer.
+				
 				crc_error = 1;
+				break;
 			}
 		}
-		//delay = 600;
+		delay = 600;
 	}
-	//printf_fast("leaving getPacket\r\n");
+	if(send_debug) {
+        	if(packet_captured) {
+            		printf("XBRIDGE:[%lu] This packet was captured %d times\r\n", getMs(), (int)packet_captured);
+        	} else {
+            		printf("XBRIDGE:[%lu] Missed a packet on all channels\r\n",getMs());
+		}
+        }
+
+	if(packet_captured) {
+		return 1;
+	}
 	return 0;
 }
 
