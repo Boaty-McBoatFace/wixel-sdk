@@ -1138,7 +1138,7 @@ void updateLeds()
 void putchar(char c)
 {
 //	uart1TxSendByte(c);
-	if (usb_connected)
+	if (usb_connected && usbComTxAvailable())
 		usbComTxSendByte(c);
 }
 
@@ -1774,6 +1774,7 @@ uint32 calculate_first_packet_delay(uint32 last_packet) {
     XDATA uint32 now = getMs();
     printf("last_packet = %lu\r\n", last_packet);
 //last_packet = 0;//??????????
+
     if(last_packet == 0) {
         return 0;
     }
